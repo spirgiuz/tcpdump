@@ -96,6 +96,10 @@ struct rtcpsdeshdr {
 	uint16_t rh_len;
 };
 
+struct rtcp_bye {
+	uint32_t bye_ssrc;
+};
+
 
 
 /*XXX*/
@@ -112,6 +116,8 @@ struct rtcpsdeshdr {
 #define 	RTCP_SDES_PRIV	8
 #define RTCP_PT_BYE	203
 #define RTCP_PT_APP	204
+#define RTCP_PT_RTPFB 205
+#define 	RTCP_RTPFB_NACK 1
 
 static void
 vat_print(netdissect_options *ndo, const void *hdr, register const struct udphdr *up)
@@ -220,6 +226,8 @@ rtcp_print(netdissect_options *ndo, const u_char *hdr, const u_char *ep)
 	struct rtcp_sdes *sdes;
 	struct rtcp_sdes_item *sdes_item;
 	struct rtcpsdeshdr *rh2= (struct rtcpsdeshdr *)hdr;
+	struct rtcp_bye *bye;
+	uint32_t *p;
 	u_int len;
 	uint16_t flags;
 	int cnt;
@@ -291,17 +299,23 @@ rtcp_print(netdissect_options *ndo, const u_char *hdr, const u_char *ep)
 			ND_PRINT((ndo,"\n"));
 			sdes_item=(char *)sdes_item+sdes_len+2;
 		}
+		// calculate padding expected and forward pointer by that much.
 		sdes=(char *)sdes_item+1+((4-(1+item_length+item_cnt*2)%4)%4);
-		//ND_PRINT((ndo, " padded %d",(4-(1+item_length+item_cnt*2)%4)%4));
 		}
-		sdes=(struct rtcp_sdes *) sdes;
+		sdes = (struct rtcp_sdes *) sdes;
 			}	
 		cnt=0;
 		break;
 	case RTCP_PT_BYE:
-		ND_PRINT((ndo, " bye %d", len));
+		bye = (struct rtcp_bye *)(rh2+1);
+		ND_PRINT((ndo, " \nbye\n"));
+		ND_PRINT((ndo, " count %d\n",cnt));
+		ND_PRINT((ndo, " length %d\n",len));
 		if (ndo->ndo_vflag)
-			ND_PRINT((ndo, " %u", EXTRACT_32BITS(&rh->rh_ssrc)));
+		while(--cnt>=0) {
+			ND_PRINT((ndo, " ssrc %u\n", EXTRACT_32BITS(&bye->bye_ssrc)));
+			bye=bye+1;
+		}
 		cnt = 0;
 		break;
 	default:

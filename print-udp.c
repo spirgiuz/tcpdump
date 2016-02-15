@@ -95,9 +95,32 @@ struct rtcpsdeshdr {
 	uint16_t rh_flags;
 	uint16_t rh_len;
 };
-
+/*
+ * BYE
+ */
 struct rtcp_bye {
 	uint32_t bye_ssrc;
+};
+
+/*
+ * RTPFB
+ */
+ struct rtcp_rtpfb_nack {
+	uint16_t pid;
+	uint16_t blp;
+};
+struct rtcp_rtpfb {
+	uint32_t sender_ssrc;
+	uint32_t source_ssrc;
+	struct rtcp_rtpfb_nack nack[1];
+};
+/*
+ * PSFB
+ */
+struct rtcp_psfb {
+	uint32_t sender_ssrc;
+	uint32_t source_ssrc;
+	uint fci[1];
 };
 
 
@@ -118,6 +141,11 @@ struct rtcp_bye {
 #define RTCP_PT_APP	204
 #define RTCP_PT_RTPFB 205
 #define 	RTCP_RTPFB_NACK 1
+#define RTCP_PT_PSFB 206
+#define 	RTCP_PSFB_PLI 1
+#define 	RTCP_PSFB_SLI 2
+#define 	RTCP_PSFB_RPSI 3
+#define		RTCP_PSFB_AFB 15
 
 static void
 vat_print(netdissect_options *ndo, const void *hdr, register const struct udphdr *up)
@@ -227,7 +255,9 @@ rtcp_print(netdissect_options *ndo, const u_char *hdr, const u_char *ep)
 	struct rtcp_sdes_item *sdes_item;
 	struct rtcpsdeshdr *rh2= (struct rtcpsdeshdr *)hdr;
 	struct rtcp_bye *bye;
-	uint32_t *p;
+	struct rtcp_rtpfb *rtpfb;
+	u_int v;
+	u_int p;
 	u_int len;
 	uint16_t flags;
 	int cnt;
@@ -239,14 +269,18 @@ rtcp_print(netdissect_options *ndo, const u_char *hdr, const u_char *ep)
 	len = (EXTRACT_16BITS(&rh->rh_len) + 1) * 4;
 	flags = EXTRACT_16BITS(&rh->rh_flags);
 	cnt = (flags >> 8) & 0x1f;
+	p = (flags >> 13 ) & 0x1;
+	v = (flags >> 14 );
+	ND_PRINT((ndo, "\nv %d\n",v));
+	ND_PRINT((ndo, "p %d\n",p));
 	switch (flags & 0xff) {
 	case RTCP_PT_SR:
 		sr = (struct rtcp_sr *)(rh + 1);
-		ND_PRINT((ndo, "\nsr\n"));
 		if (cnt >= 0)
-			ND_PRINT((ndo, " count %d\n", cnt));
+			ND_PRINT((ndo, "count %d\n", cnt));
+		ND_PRINT((ndo, "sr\n"));
 		if (len != cnt * sizeof(*rr) + sizeof(*sr) + sizeof(*rh))
-			ND_PRINT((ndo, " length [%d]\n", len));
+			ND_PRINT((ndo, "length [%d]\n", len));
 		if (ndo->ndo_vflag)
 			ND_PRINT((ndo, " sender_ssrc %u\n", EXTRACT_32BITS(&rh->rh_ssrc)));
 		if ((u_char *)(sr + 1) > ep) {
@@ -261,11 +295,11 @@ rtcp_print(netdissect_options *ndo, const u_char *hdr, const u_char *ep)
 		rr = (struct rtcp_rr *)(sr + 1);
 		break;
 	case RTCP_PT_RR:
-		ND_PRINT((ndo, "\nrr\n"));
 		if (cnt >= 0)
-			ND_PRINT((ndo, " count %d\n", cnt));
+			ND_PRINT((ndo, "count %d\n", cnt));
+		ND_PRINT((ndo, "rr\n"));
 		if (len != cnt * sizeof(*rr) + sizeof(*rh))
-			ND_PRINT((ndo, " length [%d]\n", len));
+			ND_PRINT((ndo, "length [%d]\n", len));
 		rr = (struct rtcp_rr *)(rh + 1);
 		if (ndo->ndo_vflag)
 			ND_PRINT((ndo, " sender_ssrc %u\n", EXTRACT_32BITS(&rh->rh_ssrc)));
@@ -273,10 +307,10 @@ rtcp_print(netdissect_options *ndo, const u_char *hdr, const u_char *ep)
 	case RTCP_PT_SDES:
 		
 		sdes = (struct rtcp_sdes *)(rh2+1);
-		
-		ND_PRINT((ndo, "\nsdes\n len %d\n", len));
 		if (cnt >= 0)
-			ND_PRINT((ndo, " count %d\n", cnt));
+			ND_PRINT((ndo, "count %d\n", cnt));
+		ND_PRINT((ndo, "sdes\nlength %d\n", len));
+
 		;
 		while(--cnt>=0) {	
 			sdes_item = (struct rtcp_sdes_item *)(&sdes->item[0]);
@@ -308,9 +342,9 @@ rtcp_print(netdissect_options *ndo, const u_char *hdr, const u_char *ep)
 		break;
 	case RTCP_PT_BYE:
 		bye = (struct rtcp_bye *)(rh2+1);
-		ND_PRINT((ndo, " \nbye\n"));
-		ND_PRINT((ndo, " count %d\n",cnt));
-		ND_PRINT((ndo, " length %d\n",len));
+		ND_PRINT((ndo, "bye\n"));
+		ND_PRINT((ndo, "count %d\n",cnt));
+		ND_PRINT((ndo, "length %d\n",len));
 		if (ndo->ndo_vflag)
 		while(--cnt>=0) {
 			ND_PRINT((ndo, " ssrc %u\n", EXTRACT_32BITS(&bye->bye_ssrc)));
@@ -318,6 +352,50 @@ rtcp_print(netdissect_options *ndo, const u_char *hdr, const u_char *ep)
 		}
 		cnt = 0;
 		break;
+	case RTCP_PT_RTPFB:
+		rtpfb= (struct rtcp_rtpfb *)(rh2+1);
+		struct rtcp_rtpfb_nack *nack =(struct rtcp_rtpfb_nack *)(&rtpfb->nack[0]);
+		ND_PRINT((ndo, "fmt %d\n",cnt));
+		ND_PRINT((ndo, "rtpfb\n"));
+		ND_PRINT((ndo, "length %d\n",len));
+		ND_PRINT((ndo, " sender_ssrc %u\n", EXTRACT_32BITS(&rtpfb->sender_ssrc)));
+		ND_PRINT((ndo, " source_ssrc %u\n", EXTRACT_32BITS(&rtpfb->source_ssrc)));
+		switch(cnt) {
+			case RTCP_RTPFB_NACK:;
+				
+				int i=(len-12)/4;
+				while(--i>=0) {
+					ND_PRINT((ndo, "  pid %d\n",EXTRACT_16BITS(&nack->pid)));
+					ND_PRINT((ndo, "  blp %d\n",EXTRACT_16BITS(&nack->blp)));
+					nack=nack+1;
+				}
+				break;
+			default:
+				break;
+		}
+		cnt=0;
+		break;
+	case RTCP_PT_PSFB:;
+		struct rtcp_psfb *psfb= (struct rtcp_rtpfb *)(rh2+1);
+		uint *fci =(psfb->fci[0]);
+		ND_PRINT((ndo, "fmt %d\n",cnt));
+		ND_PRINT((ndo, "psfb\n"));
+		ND_PRINT((ndo, "length %d\n",len));
+		ND_PRINT((ndo, " sender_ssrc %u\n", EXTRACT_32BITS(&psfb->sender_ssrc)));
+		ND_PRINT((ndo, " source_ssrc %u\n", EXTRACT_32BITS(&psfb->source_ssrc)));
+		switch(cnt) {
+			case RTCP_PSFB_RPSI:
+			case RTCP_PSFB_AFB:
+			case RTCP_PSFB_SLI:
+				ND_PRINT((ndo, " fci 0x%x\n", EXTRACT_32BITS(&fci)));
+				break;
+			case RTCP_PSFB_PLI:
+			default:
+				break;
+		}
+		cnt=0;
+		break;
+		
 	default:
 		ND_PRINT((ndo, " type-0x%x %d", flags & 0xff, len));
 		cnt = 0;

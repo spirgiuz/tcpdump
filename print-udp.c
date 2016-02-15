@@ -74,6 +74,30 @@ struct rtcp_rr {
 	uint32_t rr_dlsr;	/* time from recpt of last rr to xmit time */
 };
 
+
+
+/*
+ * SDES
+ */
+
+ 
+ struct rtcp_sdes_item {
+	uint8_t sdes_type;
+	uint8_t sdes_length;
+	char data[1];
+};
+ struct rtcp_sdes {
+	uint32_t sdes_ssrc;
+	struct rtcp_sdes_item item[1];
+};
+
+struct rtcpsdeshdr {
+	uint16_t rh_flags;
+	uint16_t rh_len;
+};
+
+
+
 /*XXX*/
 #define RTCP_PT_SR	200
 #define RTCP_PT_RR	201
@@ -190,14 +214,17 @@ static const u_char *
 rtcp_print(netdissect_options *ndo, const u_char *hdr, const u_char *ep)
 {
 	/* rtp v2 control (rtcp) */
-	const struct rtcp_rr *rr = 0;
-	const struct rtcp_sr *sr;
-	const struct rtcphdr *rh = (const struct rtcphdr *)hdr;
+	struct rtcp_rr *rr = 0;
+	struct rtcp_sr *sr;
+	struct rtcphdr *rh = (struct rtcphdr *)hdr;
+	struct rtcp_sdes *sdes;
+	struct rtcp_sdes_item *sdes_item;
+	struct rtcpsdeshdr *rh2= (struct rtcpsdeshdr *)hdr;
 	u_int len;
 	uint16_t flags;
 	int cnt;
 	double ts, dts;
-	if ((const u_char *)(rh + 1) > ep) {
+	if ((u_char *)(rh + 1) > ep) {
 		ND_PRINT((ndo, " [|rtcp]"));
 		return (ep);
 	}
@@ -206,36 +233,70 @@ rtcp_print(netdissect_options *ndo, const u_char *hdr, const u_char *ep)
 	cnt = (flags >> 8) & 0x1f;
 	switch (flags & 0xff) {
 	case RTCP_PT_SR:
-		sr = (const struct rtcp_sr *)(rh + 1);
-		ND_PRINT((ndo, " sr"));
+		sr = (struct rtcp_sr *)(rh + 1);
+		ND_PRINT((ndo, "\nsr\n"));
+		if (cnt >= 0)
+			ND_PRINT((ndo, " count %d\n", cnt));
 		if (len != cnt * sizeof(*rr) + sizeof(*sr) + sizeof(*rh))
-			ND_PRINT((ndo, " [%d]", len));
+			ND_PRINT((ndo, " length [%d]\n", len));
 		if (ndo->ndo_vflag)
-			ND_PRINT((ndo, " %u", EXTRACT_32BITS(&rh->rh_ssrc)));
-		if ((const u_char *)(sr + 1) > ep) {
+			ND_PRINT((ndo, " sender_ssrc %u\n", EXTRACT_32BITS(&rh->rh_ssrc)));
+		if ((u_char *)(sr + 1) > ep) {
 			ND_PRINT((ndo, " [|rtcp]"));
 			return (ep);
 		}
 		ts = (double)(EXTRACT_32BITS(&sr->sr_ntp.upper)) +
 		    ((double)(EXTRACT_32BITS(&sr->sr_ntp.lower)) /
 		    4294967296.0);
-		ND_PRINT((ndo, " @%.2f %u %up %ub", ts, EXTRACT_32BITS(&sr->sr_ts),
+		ND_PRINT((ndo, " ntp_ts @%.2f\n rtp_ts %u\n pcount %u\n ocount %u\n", ts, EXTRACT_32BITS(&sr->sr_ts),
 		    EXTRACT_32BITS(&sr->sr_np), EXTRACT_32BITS(&sr->sr_nb)));
-		rr = (const struct rtcp_rr *)(sr + 1);
+		rr = (struct rtcp_rr *)(sr + 1);
 		break;
 	case RTCP_PT_RR:
-		ND_PRINT((ndo, " rr"));
+		ND_PRINT((ndo, "\nrr\n"));
+		if (cnt >= 0)
+			ND_PRINT((ndo, " count %d\n", cnt));
 		if (len != cnt * sizeof(*rr) + sizeof(*rh))
-			ND_PRINT((ndo, " [%d]", len));
-		rr = (const struct rtcp_rr *)(rh + 1);
+			ND_PRINT((ndo, " length [%d]\n", len));
+		rr = (struct rtcp_rr *)(rh + 1);
 		if (ndo->ndo_vflag)
-			ND_PRINT((ndo, " %u", EXTRACT_32BITS(&rh->rh_ssrc)));
+			ND_PRINT((ndo, " sender_ssrc %u\n", EXTRACT_32BITS(&rh->rh_ssrc)));
 		break;
 	case RTCP_PT_SDES:
-		ND_PRINT((ndo, " sdes %d", len));
-		if (ndo->ndo_vflag)
-			ND_PRINT((ndo, " %u", EXTRACT_32BITS(&rh->rh_ssrc)));
-		cnt = 0;
+		
+		sdes = (struct rtcp_sdes *)(rh2+1);
+		
+		ND_PRINT((ndo, "\nsdes\n len %d\n", len));
+		if (cnt >= 0)
+			ND_PRINT((ndo, " count %d\n", cnt));
+		;
+		while(--cnt>=0) {	
+			sdes_item = (struct rtcp_sdes_item *)(&sdes->item[0]);
+			int item_cnt=0;
+			int item_length=0;
+		if (ndo->ndo_vflag) {
+			u_int8_t type;
+			ND_PRINT((ndo, "  ssrc %u\n", EXTRACT_32BITS(&sdes->sdes_ssrc)));
+			while((type = EXTRACT_LE_8BITS(&sdes_item->sdes_type))!=0) {
+				ND_PRINT((ndo, "   type %u\n", type));
+				u_int sdes_len = (EXTRACT_LE_8BITS(&sdes_item->sdes_length));
+				item_cnt++;
+				item_length+=sdes_len;
+				ND_PRINT((ndo, "   length %u\n", sdes_len));
+				int i;
+				ND_PRINT((ndo, "   text "));
+				for(i=0; i<sdes_len; i++) {
+					ND_PRINT((ndo, "%c", EXTRACT_LE_8BITS(&sdes_item->data[i])));
+				}
+			ND_PRINT((ndo,"\n"));
+			sdes_item=(char *)sdes_item+sdes_len+2;
+		}
+		sdes=(char *)sdes_item+1+((4-(1+item_length+item_cnt*2)%4)%4);
+		//ND_PRINT((ndo, " padded %d",(4-(1+item_length+item_cnt*2)%4)%4));
+		}
+		sdes=(struct rtcp_sdes *) sdes;
+			}	
+		cnt=0;
 		break;
 	case RTCP_PT_BYE:
 		ND_PRINT((ndo, " bye %d", len));
@@ -248,21 +309,23 @@ rtcp_print(netdissect_options *ndo, const u_char *hdr, const u_char *ep)
 		cnt = 0;
 		break;
 	}
-	if (cnt > 1)
-		ND_PRINT((ndo, " c%d", cnt));
-	while (--cnt >= 0) {
-		if ((const u_char *)(rr + 1) > ep) {
+	
+		
+	while (--cnt>=0) {
+		
+		if ((u_char *)(rr + 1) > ep) {
 			ND_PRINT((ndo, " [|rtcp]"));
 			return (ep);
 		}
 		if (ndo->ndo_vflag)
-			ND_PRINT((ndo, " %u", EXTRACT_32BITS(&rr->rr_srcid)));
+			ND_PRINT((ndo, "  source_ssrc %u\n", EXTRACT_32BITS(&rr->rr_srcid)));
 		ts = (double)(EXTRACT_32BITS(&rr->rr_lsr)) / 65536.;
 		dts = (double)(EXTRACT_32BITS(&rr->rr_dlsr)) / 65536.;
-		ND_PRINT((ndo, " %ul %us %uj @%.2f+%.2f",
+		ND_PRINT((ndo, "  plost %u\n  highest_seq %u\n  jit %u\n  lsr+dlsr @%.2f+%.2f\n\n",
 		    EXTRACT_32BITS(&rr->rr_nl) & 0x00ffffff,
 		    EXTRACT_32BITS(&rr->rr_ls),
 		    EXTRACT_32BITS(&rr->rr_dv), ts, dts));
+		rr=rr+1;
 	}
 	return (hdr + len);
 }
